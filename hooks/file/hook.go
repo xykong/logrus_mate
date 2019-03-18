@@ -81,7 +81,7 @@ func (p *FileHook) Fire(entry *logrus.Entry) (err error) {
 	message, err := getMessage(entry)
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Unable to read entry, %v", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Unable to read entry, %v", err)
 		return err
 	}
 
@@ -103,8 +103,6 @@ func (p *FileHook) Fire(entry *logrus.Entry) (err error) {
 	default:
 		return nil
 	}
-
-	return
 }
 
 func (p *FileHook) Levels() []logrus.Level {

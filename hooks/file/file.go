@@ -121,7 +121,7 @@ func (w *fileLogWriter) startLogger() error {
 		return err
 	}
 	if w.fileWriter != nil {
-		w.fileWriter.Close()
+		_ = w.fileWriter.Close()
 	}
 	w.fileWriter = file
 	return w.initFd()
@@ -148,7 +148,7 @@ func (w *fileLogWriter) WriteMsg(when time.Time, msg string, level int) error {
 			w.Lock()
 			if w.needRotate(len(msg), d) {
 				if err := w.doRotate(when); err != nil {
-					fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.Filename, err)
+					_, _ = fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.Filename, err)
 				}
 			}
 			w.Unlock()
@@ -176,7 +176,7 @@ func (w *fileLogWriter) createLogFile() (*os.File, error) {
 	fd, err := os.OpenFile(w.Filename, os.O_WRONLY|os.O_APPEND|os.O_CREATE, os.FileMode(perm))
 	if err == nil {
 		// Make sure file perm is user set perm cause of `os.OpenFile` will obey umask
-		os.Chmod(w.Filename, os.FileMode(perm))
+		_ = os.Chmod(w.Filename, os.FileMode(perm))
 	}
 	return fd, err
 }
@@ -192,7 +192,7 @@ func (w *fileLogWriter) initFd() error {
 	w.dailyOpenDate = w.dailyOpenTime.Day()
 	w.maxLinesCurLines = 0
 	if w.Rotate {
-		if w.Daily  {
+		if w.Daily {
 			go w.dailyRotate(w.dailyOpenTime)
 		}
 		if fInfo.Size() > 0 && w.MaxLines > 0 {
@@ -214,7 +214,7 @@ func (w *fileLogWriter) dailyRotate(openTime time.Time) {
 	w.Lock()
 	if w.needRotate(0, time.Now().Day()) {
 		if err := w.doRotate(time.Now()); err != nil {
-			fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.Filename, err)
+			_, _ = fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.Filename, err)
 		}
 	}
 	w.Unlock()
@@ -280,7 +280,7 @@ func (w *fileLogWriter) doRotate(logTime time.Time) error {
 	}
 	// return error if the last file checked still existed
 	if err == nil {
-		return fmt.Errorf("Rotate: Cannot find free log number to rename %s", w.Filename)
+		return fmt.Errorf("rotate: Cannot find free log number to rename %s", w.Filename)
 	}
 
 	// close fileWriter before rename
@@ -301,20 +301,20 @@ RESTART_LOGGER:
 	go w.deleteOldLog()
 
 	if startLoggerErr != nil {
-		return fmt.Errorf("Rotate StartLogger: %s", startLoggerErr)
+		return fmt.Errorf("rotate StartLogger: %s", startLoggerErr)
 	}
 	if err != nil {
-		return fmt.Errorf("Rotate: %s", err)
+		return fmt.Errorf("rotate: %s", err)
 	}
 	return nil
 }
 
 func (w *fileLogWriter) deleteOldLog() {
 	dir := filepath.Dir(w.Filename)
-	filepath.Walk(dir, func(path string, info os.FileInfo, err error) (returnErr error) {
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) (returnErr error) {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Fprintf(os.Stderr, "Unable to delete old log '%s', error: %v\n", path, r)
+				_, _ = fmt.Fprintf(os.Stderr, "Unable to delete old log '%s', error: %v\n", path, r)
 			}
 		}()
 
@@ -322,10 +322,10 @@ func (w *fileLogWriter) deleteOldLog() {
 			return
 		}
 
-		if !info.IsDir() && info.ModTime().Add(24*time.Hour*time.Duration(w.MaxDays)).Before(time.Now()) {
+		if !info.IsDir() && info.ModTime().Add(24 * time.Hour * time.Duration(w.MaxDays)).Before(time.Now()) {
 			if strings.HasPrefix(filepath.Base(path), filepath.Base(w.fileNameOnly)) &&
 				strings.HasSuffix(filepath.Base(path), w.suffix) {
-				os.Remove(path)
+				_ = os.Remove(path)
 			}
 		}
 		return
@@ -341,7 +341,7 @@ func (w *fileLogWriter) Destroy() {
 // there are no buffering messages in file logger in memory.
 // flush file means sync file from disk.
 func (w *fileLogWriter) Flush() {
-	w.fileWriter.Sync()
+	_ = w.fileWriter.Sync()
 }
 
 func formatTimeHeader(when time.Time) ([]byte, int) {
