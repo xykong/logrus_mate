@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/sirupsen/logrus"
 
 	"github.com/gogap/config"
 	"github.com/gogap/logrus_mate"
@@ -17,15 +16,17 @@ import (
 )
 
 type fileHookConfig struct {
-	Filename   string `json:"filename"`
-	MaxLines   int64  `json:"maxLines"`
-	MaxSize    int64  `json:"maxsize"`
-	Daily      bool   `json:"daily"`
-	MaxDays    int64  `json:"maxDays"`
-	Rotate     bool   `json:"rotate"`
-	Perm       string `json:"perm"`
-	RotatePerm string `json:"rotateperm"`
-	Level      int32  `json:"level"`
+	Filename    string `json:"filename"`
+	MaxLines    int64  `json:"maxLines"`
+	MaxSize     int64  `json:"maxsize"`
+	StripColors bool   `json:"stripColors"`
+	Daily       bool   `json:"daily"`
+	Hourly      bool   `json:"hourly"`
+	MaxDays     int64  `json:"maxDays"`
+	Rotate      bool   `json:"rotate"`
+	Perm        string `json:"perm"`
+	RotatePerm  string `json:"rotateperm"`
+	Level       int32  `json:"level"`
 }
 
 func init() {
@@ -44,15 +45,17 @@ func NewFileHook(config config.Configuration) (hook logrus.Hook, err error) {
 	}
 
 	hookConf := fileHookConfig{
-		Filename:   filename,
-		Daily:      config.GetBoolean("daily", true),
-		MaxDays:    config.GetInt64("max-days", 7),
-		Rotate:     config.GetBoolean("rotate", true),
-		MaxLines:   config.GetInt64("max-lines", 10000),
-		MaxSize:    config.GetInt64("max-size", 1024),
-		RotatePerm: config.GetString("rotate-perm", "0440"),
-		Perm:       config.GetString("perm", "0660"),
-		Level:      config.GetInt32("level"),
+		Filename:    filename,
+		StripColors: config.GetBoolean("strip-colors", true),
+		Daily:       config.GetBoolean("daily", true),
+		Hourly:      config.GetBoolean("hourly", true),
+		MaxDays:     config.GetInt64("max-days", 7),
+		Rotate:      config.GetBoolean("rotate", true),
+		MaxLines:    config.GetInt64("max-lines", 10000),
+		MaxSize:     config.GetInt64("max-size", 1024),
+		RotatePerm:  config.GetString("rotate-perm", "0440"),
+		Perm:        config.GetString("perm", "0660"),
+		Level:       config.GetInt32("level"),
 	}
 
 	w := newFileWriter()
@@ -78,31 +81,19 @@ type FileHook struct {
 }
 
 func (p *FileHook) Fire(entry *logrus.Entry) (err error) {
-	message, err := getMessage(entry)
+	if p.W.Level < int(entry.Level) {
+		return nil
+	}
+	message, err := entry.String()
 
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Unable to read entry, %v", err)
+		fmt.Fprintf(os.Stderr, "Unable to read entry, %v", err)
 		return err
 	}
 
 	now := time.Now()
 
-	switch entry.Level {
-	case logrus.PanicLevel:
-		fallthrough
-	case logrus.FatalLevel:
-		fallthrough
-	case logrus.ErrorLevel:
-		return p.W.WriteMsg(now, fmt.Sprintf("[ERROR] %s", message), LevelError)
-	case logrus.WarnLevel:
-		return p.W.WriteMsg(now, fmt.Sprintf("[WARN] %s", message), LevelWarn)
-	case logrus.InfoLevel:
-		return p.W.WriteMsg(now, fmt.Sprintf("[INFO] %s", message), LevelInfo)
-	case logrus.DebugLevel:
-		return p.W.WriteMsg(now, fmt.Sprintf("[DEBUG] %s", message), LevelDebug)
-	default:
-		return nil
-	}
+	return p.W.WriteMsg(now, message)
 }
 
 func (p *FileHook) Levels() []logrus.Level {

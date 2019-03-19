@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,6 +57,11 @@ type fileLogWriter struct {
 	MaxSize        int `json:"maxsize"`
 	maxSizeCurSize int
 
+	StripColors bool `json:"stripcolors"`
+
+	Hourly         bool `json:"hourly"`
+	hourlyOpenDate int
+
 	// Rotate daily
 	Daily         bool  `json:"daily"`
 	MaxDays       int64 `json:"maxdays"`
@@ -76,12 +82,14 @@ type fileLogWriter struct {
 // newFileWriter create a FileLogWriter returning as LoggerInterface.
 func newFileWriter() *fileLogWriter {
 	w := &fileLogWriter{
-		Daily:      true,
-		MaxDays:    7,
-		Rotate:     true,
-		RotatePerm: "0440",
-		Level:      LevelDebug,
-		Perm:       "0660",
+		StripColors: true,
+		Daily:       true,
+		Hourly:      true,
+		MaxDays:     7,
+		Rotate:      true,
+		RotatePerm:  "0440",
+		Level:       LevelDebug,
+		Perm:        "0660",
 	}
 	return w
 }
@@ -93,6 +101,7 @@ func newFileWriter() *fileLogWriter {
 //	"maxLines":10000,
 //	"maxsize":1024,
 //	"daily":true,
+//	"hourly":true,
 //	"maxDays":15,
 //	"rotate":true,
 //  	"perm":"0600"
@@ -127,26 +136,35 @@ func (w *fileLogWriter) startLogger() error {
 	return w.initFd()
 }
 
-func (w *fileLogWriter) needRotate(size int, day int) bool {
+func (w *fileLogWriter) needRotate(size int, day int, hour int) bool {
 	return (w.MaxLines > 0 && w.maxLinesCurLines >= w.MaxLines) ||
 		(w.MaxSize > 0 && w.maxSizeCurSize >= w.MaxSize) ||
-		(w.Daily && day != w.dailyOpenDate)
+		(w.Daily && day != w.dailyOpenDate) ||
+		(w.Hourly && hour != w.hourlyOpenDate)
+}
 
+const ansi = "[\u001B\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))"
+
+var re = regexp.MustCompile(ansi)
+
+func Strip(str string) string {
+	return re.ReplaceAllString(str, "")
 }
 
 // WriteMsg write logger message into file.
-func (w *fileLogWriter) WriteMsg(when time.Time, msg string, level int) error {
-	if level > w.Level {
-		return nil
+func (w *fileLogWriter) WriteMsg(when time.Time, msg string) error {
+	_, d, h := formatTimeHeader(when)
+
+	if w.StripColors {
+		msg = Strip(msg)
 	}
-	h, d := formatTimeHeader(when)
-	msg = string(h) + msg + "\n"
+
 	if w.Rotate {
 		w.RLock()
-		if w.needRotate(len(msg), d) {
+		if w.needRotate(len(msg), d, h) {
 			w.RUnlock()
 			w.Lock()
-			if w.needRotate(len(msg), d) {
+			if w.needRotate(len(msg), d, h) {
 				if err := w.doRotate(when); err != nil {
 					_, _ = fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.Filename, err)
 				}
@@ -190,6 +208,7 @@ func (w *fileLogWriter) initFd() error {
 	w.maxSizeCurSize = int(fInfo.Size())
 	w.dailyOpenTime = time.Now()
 	w.dailyOpenDate = w.dailyOpenTime.Day()
+	w.hourlyOpenDate = w.dailyOpenTime.Hour()
 	w.maxLinesCurLines = 0
 	if w.Rotate {
 		if w.Daily {
@@ -212,7 +231,7 @@ func (w *fileLogWriter) dailyRotate(openTime time.Time) {
 	tm := time.NewTimer(time.Duration(nextDay.UnixNano() - openTime.UnixNano() + 100))
 	<-tm.C
 	w.Lock()
-	if w.needRotate(0, time.Now().Day()) {
+	if w.needRotate(0, time.Now().Day(), time.Now().Hour()) {
 		if err := w.doRotate(time.Now()); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.Filename, err)
 		}
@@ -259,6 +278,11 @@ func (w *fileLogWriter) doRotate(logTime time.Time) error {
 		return err
 	}
 
+	timeFormat := "2006-01-02"
+	if w.Hourly {
+		timeFormat = "2006-01-02-15"
+	}
+
 	_, err = os.Lstat(w.Filename)
 	if err != nil {
 		//even if the file is not exist or other ,we should RESTART the logger
@@ -267,14 +291,14 @@ func (w *fileLogWriter) doRotate(logTime time.Time) error {
 
 	if w.MaxLines > 0 || w.MaxSize > 0 {
 		for ; err == nil && num <= 999; num++ {
-			fName = w.fileNameOnly + fmt.Sprintf(".%s.%03d%s", logTime.Format("2006-01-02"), num, w.suffix)
+			fName = w.fileNameOnly + fmt.Sprintf(".%s.%03d%s", logTime.Format(timeFormat), num, w.suffix)
 			_, err = os.Lstat(fName)
 		}
 	} else {
-		fName = fmt.Sprintf("%s.%s%s", w.fileNameOnly, w.dailyOpenTime.Format("2006-01-02"), w.suffix)
+		fName = fmt.Sprintf("%s.%s%s", w.fileNameOnly, w.dailyOpenTime.Format(timeFormat), w.suffix)
 		_, err = os.Lstat(fName)
 		for ; err == nil && num <= 999; num++ {
-			fName = w.fileNameOnly + fmt.Sprintf(".%s.%03d%s", w.dailyOpenTime.Format("2006-01-02"), num, w.suffix)
+			fName = w.fileNameOnly + fmt.Sprintf(".%s.%03d%s", w.dailyOpenTime.Format(timeFormat), num, w.suffix)
 			_, err = os.Lstat(fName)
 		}
 	}
@@ -344,7 +368,7 @@ func (w *fileLogWriter) Flush() {
 	_ = w.fileWriter.Sync()
 }
 
-func formatTimeHeader(when time.Time) ([]byte, int) {
+func formatTimeHeader(when time.Time) ([]byte, int, int) {
 	y, mo, d := when.Date()
 	h, mi, s := when.Clock()
 	ns := when.Nanosecond() / 1000000
@@ -377,5 +401,5 @@ func formatTimeHeader(when time.Time) ([]byte, int) {
 
 	buf[23] = ' '
 
-	return buf[0:], d
+	return buf[0:], d, h
 }
