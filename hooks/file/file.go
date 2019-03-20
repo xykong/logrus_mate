@@ -206,7 +206,7 @@ func (w *fileLogWriter) initFd() error {
 		return fmt.Errorf("get stat err: %s", err)
 	}
 	w.maxSizeCurSize = int(fInfo.Size())
-	w.dailyOpenTime = time.Now()
+	w.dailyOpenTime = fInfo.ModTime()
 	w.dailyOpenDate = w.dailyOpenTime.Day()
 	w.hourlyOpenDate = w.dailyOpenTime.Hour()
 	w.maxLinesCurLines = 0
@@ -289,19 +289,28 @@ func (w *fileLogWriter) doRotate(logTime time.Time) error {
 		goto RESTART_LOGGER
 	}
 
-	if w.MaxLines > 0 || w.MaxSize > 0 {
 		for ; err == nil && num <= 999; num++ {
-			fName = w.fileNameOnly + fmt.Sprintf(".%s.%03d%s", logTime.Format(timeFormat), num, w.suffix)
+		fName = fmt.Sprintf("%s.%s.%03d%s", w.fileNameOnly, w.dailyOpenTime.Format(timeFormat), num, w.suffix)
 			_, err = os.Lstat(fName)
+
+		if num == 1 {
+			if err == nil {
+				continue
+			}
+			withoutNumName := fmt.Sprintf("%s.%s%s", w.fileNameOnly, w.dailyOpenTime.Format(timeFormat), w.suffix)
+			_, err = os.Lstat(withoutNumName)
+			if err == nil {
+				err = os.Rename(withoutNumName, fName)
+				if err != nil {
+					goto RESTART_LOGGER
 		}
 	} else {
-		fName = fmt.Sprintf("%s.%s%s", w.fileNameOnly, w.dailyOpenTime.Format(timeFormat), w.suffix)
-		_, err = os.Lstat(fName)
-		for ; err == nil && num <= 999; num++ {
-			fName = w.fileNameOnly + fmt.Sprintf(".%s.%03d%s", w.dailyOpenTime.Format(timeFormat), num, w.suffix)
-			_, err = os.Lstat(fName)
+				fName = withoutNumName
+			}
+			break
 		}
 	}
+
 	// return error if the last file checked still existed
 	if err == nil {
 		return fmt.Errorf("rotate: Cannot find free log number to rename %s", w.Filename)
