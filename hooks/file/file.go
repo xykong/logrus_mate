@@ -285,13 +285,13 @@ func (w *fileLogWriter) doRotate(logTime time.Time) error {
 
 	_, err = os.Lstat(w.Filename)
 	if err != nil {
-		//even if the file is not exist or other ,we should RESTART the logger
-		goto RESTART_LOGGER
+		//even if the file is not exist or other, we should RESTART the logger
+		return w.restartLogger(err)
 	}
 
-		for ; err == nil && num <= 999; num++ {
+	for ; err == nil && num <= 999; num++ {
 		fName = fmt.Sprintf("%s.%s.%03d%s", w.fileNameOnly, w.dailyOpenTime.Format(timeFormat), num, w.suffix)
-			_, err = os.Lstat(fName)
+		_, err = os.Lstat(fName)
 
 		if num == 1 {
 			if err == nil {
@@ -302,9 +302,9 @@ func (w *fileLogWriter) doRotate(logTime time.Time) error {
 			if err == nil {
 				err = os.Rename(withoutNumName, fName)
 				if err != nil {
-					goto RESTART_LOGGER
-		}
-	} else {
+					return w.restartLogger(err)
+				}
+			} else {
 				fName = withoutNumName
 			}
 			break
@@ -323,12 +323,15 @@ func (w *fileLogWriter) doRotate(logTime time.Time) error {
 	// even if occurs error,we MUST guarantee to  restart new logger
 	err = os.Rename(w.Filename, fName)
 	if err != nil {
-		goto RESTART_LOGGER
+		return w.restartLogger(err)
 	}
 
 	err = os.Chmod(fName, os.FileMode(rotatePerm))
 
-RESTART_LOGGER:
+	return w.restartLogger(err)
+}
+
+func (w *fileLogWriter) restartLogger(err error) error {
 
 	startLoggerErr := w.startLogger()
 	go w.deleteOldLog()
@@ -336,9 +339,11 @@ RESTART_LOGGER:
 	if startLoggerErr != nil {
 		return fmt.Errorf("rotate StartLogger: %s", startLoggerErr)
 	}
+
 	if err != nil {
 		return fmt.Errorf("rotate: %s", err)
 	}
+
 	return nil
 }
 

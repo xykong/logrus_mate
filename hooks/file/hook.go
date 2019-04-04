@@ -1,18 +1,15 @@
 package logrus_file
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/sirupsen/logrus"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/gogap/config"
 	"github.com/gogap/logrus_mate"
-	"github.com/gogap/logrus_mate/hooks/utils/caller"
 )
 
 type fileHookConfig struct {
@@ -87,7 +84,7 @@ func (p *FileHook) Fire(entry *logrus.Entry) (err error) {
 	message, err := entry.String()
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Unable to read entry, %v", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Unable to read entry, %v", err)
 		return err
 	}
 
@@ -105,41 +102,4 @@ func (p *FileHook) Levels() []logrus.Level {
 		logrus.InfoLevel,
 		logrus.DebugLevel,
 	}
-}
-
-func getMessage(entry *logrus.Entry) (message string, err error) {
-	message = message + fmt.Sprintf("%s\n", entry.Message)
-	for k, v := range entry.Data {
-		if !strings.HasPrefix(k, "err_") {
-			message = message + fmt.Sprintf("%v:%v\n", k, v)
-		}
-	}
-	if errCode, exist := entry.Data["err_code"]; exist {
-
-		ns, _ := entry.Data["err_ns"]
-		ctx, _ := entry.Data["err_ctx"]
-		id, _ := entry.Data["err_id"]
-		tSt, _ := entry.Data["err_stack"]
-		st, _ := tSt.(string)
-		st = strings.Replace(st, "\n", "\n\t\t", -1)
-
-		buf := bytes.NewBuffer(nil)
-		buf.WriteString(fmt.Sprintf("\tid:\n\t\t%s#%d:%s\n", ns, errCode, id))
-		buf.WriteString(fmt.Sprintf("\tcontext:\n\t\t%s\n", ctx))
-		buf.WriteString(fmt.Sprintf("\tstacktrace:\n\t\t%s", st))
-
-		message = message + fmt.Sprintf("%v", buf.String())
-	} else {
-		file, lineNumber := caller.GetCallerIgnoringLogMulti(2)
-		if file != "" {
-			sep := fmt.Sprintf("%s/src/", os.Getenv("GOPATH"))
-			fileName := strings.Split(file, sep)
-			if len(fileName) >= 2 {
-				file = fileName[1]
-			}
-		}
-		message = message + fmt.Sprintf("%s:%d", file, lineNumber)
-	}
-
-	return
 }
