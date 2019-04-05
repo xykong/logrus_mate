@@ -166,9 +166,10 @@ func (w *fileLogWriter) WriteMsg(when time.Time, msg string) error {
 			w.Lock()
 			if w.needRotate(len(msg), d, h) {
 				if err := w.doRotate(when); err != nil {
-					_, _ = fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.Filename, err)
+					_, _ = fmt.Fprintf(os.Stderr, "%v FileLogWriter(%q): %s\n", when, w.Filename, err)
 				}
 			}
+
 			w.Unlock()
 		} else {
 			w.RUnlock()
@@ -211,9 +212,6 @@ func (w *fileLogWriter) initFd() error {
 	w.hourlyOpenDate = w.dailyOpenTime.Hour()
 	w.maxLinesCurLines = 0
 	if w.Rotate {
-		if w.Daily {
-			go w.dailyRotate(w.dailyOpenTime)
-		}
 		if fInfo.Size() > 0 && w.MaxLines > 0 {
 			count, err := w.lines()
 			if err != nil {
@@ -223,20 +221,6 @@ func (w *fileLogWriter) initFd() error {
 		}
 	}
 	return nil
-}
-
-func (w *fileLogWriter) dailyRotate(openTime time.Time) {
-	y, m, d := openTime.Add(24 * time.Hour).Date()
-	nextDay := time.Date(y, m, d, 0, 0, 0, 0, openTime.Location())
-	tm := time.NewTimer(time.Duration(nextDay.UnixNano() - openTime.UnixNano() + 100))
-	<-tm.C
-	w.Lock()
-	if w.needRotate(0, time.Now().Day(), time.Now().Hour()) {
-		if err := w.doRotate(time.Now()); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", w.Filename, err)
-		}
-	}
-	w.Unlock()
 }
 
 func (w *fileLogWriter) lines() (int, error) {
@@ -292,11 +276,13 @@ func (w *fileLogWriter) doRotate(logTime time.Time) error {
 	for ; err == nil && num <= 999; num++ {
 		fName = fmt.Sprintf("%s.%s.%03d%s", w.fileNameOnly, w.dailyOpenTime.Format(timeFormat), num, w.suffix)
 		_, err = os.Lstat(fName)
+		// if file exist, try next
+		if err == nil {
+			continue
+		}
 
+		// for the fist log, we don't want the num suffix
 		if num == 1 {
-			if err == nil {
-				continue
-			}
 			withoutNumName := fmt.Sprintf("%s.%s%s", w.fileNameOnly, w.dailyOpenTime.Format(timeFormat), w.suffix)
 			_, err = os.Lstat(withoutNumName)
 			if err == nil {
@@ -320,7 +306,7 @@ func (w *fileLogWriter) doRotate(logTime time.Time) error {
 	w.fileWriter.Close()
 
 	// Rename the file to its new found name
-	// even if occurs error,we MUST guarantee to  restart new logger
+	// even if occurs error,we MUST guarantee to restart new logger
 	err = os.Rename(w.Filename, fName)
 	if err != nil {
 		return w.restartLogger(err)
