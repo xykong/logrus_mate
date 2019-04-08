@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -151,6 +152,23 @@ func Strip(str string) string {
 	return re.ReplaceAllString(str, "")
 }
 
+func GoId() int {
+	defer func() {
+		if err := recover(); err != nil {
+			fmt.Println("panic recover:panic info:%v", err)
+		}
+	}()
+
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	idField := strings.Fields(strings.TrimPrefix(string(buf[:n]), "goroutine "))[0]
+	id, err := strconv.Atoi(idField)
+	if err != nil {
+		panic(fmt.Sprintf("cannot get goroutine id: %v", err))
+	}
+	return id
+}
+
 // WriteMsg write logger message into file.
 func (w *fileLogWriter) WriteMsg(when time.Time, msg string) error {
 	_, d, h := formatTimeHeader(when)
@@ -166,7 +184,7 @@ func (w *fileLogWriter) WriteMsg(when time.Time, msg string) error {
 			w.Lock()
 			if w.needRotate(len(msg), d, h) {
 				if err := w.doRotate(when); err != nil {
-					_, _ = fmt.Fprintf(os.Stderr, "%v FileLogWriter(%q): %s\n", when, w.Filename, err)
+					_, _ = fmt.Fprintf(os.Stderr, "%v %d FileLogWriter(%q): %s\n", when, GoId(), w.Filename, err)
 				}
 			}
 
@@ -183,6 +201,7 @@ func (w *fileLogWriter) WriteMsg(when time.Time, msg string) error {
 		w.maxSizeCurSize += len(msg)
 	}
 	w.Unlock()
+
 	return err
 }
 
@@ -255,6 +274,7 @@ func (w *fileLogWriter) lines() (int, error) {
 func (w *fileLogWriter) doRotate(logTime time.Time) error {
 	// file exists
 	// Find the next available number
+	maxSuffixNum := 999
 	num := 1
 	fName := ""
 	rotatePerm, err := strconv.ParseInt(w.RotatePerm, 8, 64)
@@ -273,7 +293,7 @@ func (w *fileLogWriter) doRotate(logTime time.Time) error {
 		return w.restartLogger(err)
 	}
 
-	for ; err == nil && num <= 999; num++ {
+	for ; err == nil && num <= maxSuffixNum; num++ {
 		fName = fmt.Sprintf("%s.%s.%03d%s", w.fileNameOnly, w.dailyOpenTime.Format(timeFormat), num, w.suffix)
 		_, err = os.Lstat(fName)
 		// if file exist, try next
@@ -288,7 +308,8 @@ func (w *fileLogWriter) doRotate(logTime time.Time) error {
 			if err == nil {
 				err = os.Rename(withoutNumName, fName)
 				if err != nil {
-					return w.restartLogger(err)
+					_, _ = fmt.Fprintf(os.Stderr, "rotate: Rename %s to %s failed, %v\n", withoutNumName, fName, err)
+					continue
 				}
 			} else {
 				fName = withoutNumName
@@ -298,7 +319,7 @@ func (w *fileLogWriter) doRotate(logTime time.Time) error {
 	}
 
 	// return error if the last file checked still existed
-	if err == nil {
+	if err == nil && num > maxSuffixNum {
 		return fmt.Errorf("rotate: Cannot find free log number to rename %s", w.Filename)
 	}
 
