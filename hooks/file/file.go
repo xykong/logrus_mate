@@ -61,12 +61,12 @@ type fileLogWriter struct {
 	StripColors bool `json:"stripcolors"`
 
 	Hourly         bool `json:"hourly"`
-	hourlyOpenDate int
+	HourlyOpenDate int  `json:"hourly_open"`
 
 	// Rotate daily
 	Daily         bool  `json:"daily"`
 	MaxDays       int64 `json:"maxdays"`
-	dailyOpenDate int
+	DailyOpenDate int   `json:"daily_open"`
 	dailyOpenTime time.Time
 
 	Rotate bool `json:"rotate"`
@@ -80,8 +80,20 @@ type fileLogWriter struct {
 	fileNameOnly, suffix string // like "project.log", project is fileNameOnly and .log is suffix
 }
 
+var instance map[string]*fileLogWriter
+
 // newFileWriter create a FileLogWriter returning as LoggerInterface.
-func newFileWriter() *fileLogWriter {
+func newFileWriter(jsonConfig string) *fileLogWriter {
+
+	if instance == nil {
+		instance = make(map[string]*fileLogWriter)
+	}
+
+	if value, ok := instance[jsonConfig]; ok {
+		_, _ = fmt.Fprintf(os.Stderr, "%d %v rotate: newFileWriter use exist %v\n", GoId(), time.Now(), value)
+		return value
+	}
+
 	w := &fileLogWriter{
 		StripColors: true,
 		Daily:       true,
@@ -92,7 +104,27 @@ func newFileWriter() *fileLogWriter {
 		Level:       LevelDebug,
 		Perm:        "0660",
 	}
+
+	_, _ = fmt.Fprintf(os.Stderr, "%d %v rotate: newFileWriter create new %v\n", GoId(), time.Now(), w)
+
+	err := w.Init(jsonConfig)
+	if err != nil {
+		return nil
+	}
+
+	instance[jsonConfig] = w
+
 	return w
+}
+
+func (w fileLogWriter) String() string {
+
+	b, err := json.Marshal(w)
+	if err != nil {
+		return fmt.Sprintf("%s, %d, %d", w.Filename, w.HourlyOpenDate, w.DailyOpenDate)
+	}
+
+	return string(b)
 }
 
 // Init file logger with json config.
@@ -138,10 +170,11 @@ func (w *fileLogWriter) startLogger() error {
 }
 
 func (w *fileLogWriter) needRotate(size int, day int, hour int) bool {
+
 	return (w.MaxLines > 0 && w.maxLinesCurLines >= w.MaxLines) ||
 		(w.MaxSize > 0 && w.maxSizeCurSize >= w.MaxSize) ||
-		(w.Daily && day != w.dailyOpenDate) ||
-		(w.Hourly && hour != w.hourlyOpenDate)
+		(w.Daily && day != w.DailyOpenDate) ||
+		(w.Hourly && hour != w.HourlyOpenDate)
 }
 
 const ansi = "[\u001B\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))"
@@ -155,7 +188,7 @@ func Strip(str string) string {
 func GoId() int {
 	defer func() {
 		if err := recover(); err != nil {
-			fmt.Println("panic recover:panic info:%v", err)
+			fmt.Printf("panic recover:panic info: %v\n", err)
 		}
 	}()
 
@@ -182,9 +215,12 @@ func (w *fileLogWriter) WriteMsg(when time.Time, msg string) error {
 		if w.needRotate(len(msg), d, h) {
 			w.RUnlock()
 			w.Lock()
+
+			_, _ = fmt.Fprintf(os.Stderr, "%d %v rotate: WriteMsg day %d, hour %d, %v\n", GoId(), time.Now(), d, h, w)
+
 			if w.needRotate(len(msg), d, h) {
 				if err := w.doRotate(when); err != nil {
-					_, _ = fmt.Fprintf(os.Stderr, "%v %d FileLogWriter(%q): %s\n", when, GoId(), w.Filename, err)
+					_, _ = fmt.Fprintf(os.Stderr, "%d %v WriteMsg FileLogWriter(%q): %s\n", GoId(), when, w.Filename, err)
 				}
 			}
 
@@ -211,6 +247,7 @@ func (w *fileLogWriter) createLogFile() (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	fd, err := os.OpenFile(w.Filename, os.O_WRONLY|os.O_APPEND|os.O_CREATE, os.FileMode(perm))
 	if err == nil {
 		// Make sure file perm is user set perm cause of `os.OpenFile` will obey umask
@@ -225,10 +262,11 @@ func (w *fileLogWriter) initFd() error {
 	if err != nil {
 		return fmt.Errorf("get stat err: %s", err)
 	}
+
 	w.maxSizeCurSize = int(fInfo.Size())
 	w.dailyOpenTime = fInfo.ModTime()
-	w.dailyOpenDate = w.dailyOpenTime.Day()
-	w.hourlyOpenDate = w.dailyOpenTime.Hour()
+	w.DailyOpenDate = w.dailyOpenTime.Day()
+	w.HourlyOpenDate = w.dailyOpenTime.Hour()
 	w.maxLinesCurLines = 0
 	if w.Rotate {
 		if fInfo.Size() > 0 && w.MaxLines > 0 {
@@ -272,6 +310,8 @@ func (w *fileLogWriter) lines() (int, error) {
 // DoRotate means it need to write file in new file.
 // new file name like xx.2013-01-01.log (daily) or xx.001.log (by line or size)
 func (w *fileLogWriter) doRotate(logTime time.Time) error {
+	_, _ = fmt.Fprintf(os.Stderr, "%d %v rotate: doRotate logTime %v, %v\n", GoId(), time.Now(), logTime, w)
+
 	// file exists
 	// Find the next available number
 	maxSuffixNum := 999
@@ -298,6 +338,7 @@ func (w *fileLogWriter) doRotate(logTime time.Time) error {
 		_, err = os.Lstat(fName)
 		// if file exist, try next
 		if err == nil {
+			_, _ = fmt.Fprintf(os.Stderr, "%d %v rotate: file exist %s, %v\n", GoId(), time.Now(), fName, w)
 			continue
 		}
 
@@ -306,15 +347,23 @@ func (w *fileLogWriter) doRotate(logTime time.Time) error {
 			withoutNumName := fmt.Sprintf("%s.%s%s", w.fileNameOnly, w.dailyOpenTime.Format(timeFormat), w.suffix)
 			_, err = os.Lstat(withoutNumName)
 			if err == nil {
+
+				if w.MaxLines == 0 && w.MaxSize == 0 {
+					// skip rotate file, dest file exist and new message come. do nothing, write to current file.
+					_, _ = fmt.Fprintf(os.Stderr, "%d %v rotate: skip rotate file %s, %v\n", GoId(), time.Now(), withoutNumName, w)
+					return w.restartLogger(err)
+				}
+
 				err = os.Rename(withoutNumName, fName)
 				if err != nil {
-					_, _ = fmt.Fprintf(os.Stderr, "rotate: Rename %s to %s failed, %v\n", withoutNumName, fName, err)
-					continue
+					_, _ = fmt.Fprintf(os.Stderr, "%d %v rotate: Rename %s to %s failed, %v\n", GoId(), time.Now(), withoutNumName, fName, err)
 				}
+				_, _ = fmt.Fprintf(os.Stderr, "%d %v rotate: Rename %s to %s ok, %v\n", GoId(), time.Now(), withoutNumName, fName, w)
 			} else {
 				fName = withoutNumName
+				_, _ = fmt.Fprintf(os.Stderr, "%d %v rotate: use file name %s, %v\n", GoId(), time.Now(), fName, w)
+				break
 			}
-			break
 		}
 	}
 
@@ -325,6 +374,8 @@ func (w *fileLogWriter) doRotate(logTime time.Time) error {
 
 	// close fileWriter before rename
 	w.fileWriter.Close()
+
+	_, _ = fmt.Fprintf(os.Stderr, "%d %v rotate: Rename log %s to %s ok, %v\n", GoId(), time.Now(), w.Filename, fName, w)
 
 	// Rename the file to its new found name
 	// even if occurs error,we MUST guarantee to restart new logger
@@ -344,11 +395,11 @@ func (w *fileLogWriter) restartLogger(err error) error {
 	go w.deleteOldLog()
 
 	if startLoggerErr != nil {
-		return fmt.Errorf("rotate StartLogger: %s", startLoggerErr)
+		return fmt.Errorf("rotate: restartLogger startLoggerErr: %v", startLoggerErr)
 	}
 
 	if err != nil {
-		return fmt.Errorf("rotate: %s", err)
+		return fmt.Errorf("rotate: restartLogger err: %v", err)
 	}
 
 	return nil

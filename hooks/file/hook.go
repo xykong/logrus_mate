@@ -55,16 +55,13 @@ func NewFileHook(config config.Configuration) (hook logrus.Hook, err error) {
 		Level:       config.GetInt32("level"),
 	}
 
-	w := newFileWriter()
-
 	confData, err := json.Marshal(hookConf)
-
 	if err != nil {
 		return
 	}
 
-	err = w.Init(string(confData))
-	if err != nil {
+	w := newFileWriter(string(confData))
+	if w == nil {
 		return
 	}
 
